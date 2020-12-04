@@ -1,0 +1,1 @@
+http://maps.data.ug/geoserver/wfs?format_options=charset%3AUTF-8&typename=geonode%3Auganda_districts_2014&outputFormat=SHAPE-ZIP&version=1.0.0&service=WFS&request=GetFeature

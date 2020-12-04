@@ -1,0 +1,1452 @@
+---
+title: "Replication - SI"
+author: "Clara Bicalho, Melina Platas, Leah Rosenzweig"
+output: 
+  pdf_document:
+    number_sections: TRUE
+    fig_caption: yes
+---
+
+<!-- \listoffigures -->
+
+\listoftables
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+rm(list = setdiff(ls(), "clean"))
+
+# packages
+pks <- c(
+  "readstata13","reshape","dotwhisker", "MASS","dplyr","foreign",
+  "tidyverse","lfe","stargazer","clubSandwich", "randomizr",
+  "haven","rstudioapi", "stringr", "ri", "car", "xtable",
+  "rmarkdown", "tidyr", "iterators", "parallel", "gridExtra", 
+  "kableExtra", "readxl", "ggmap", "rgdal", "maptools", 
+  "sf", "raster", "sp", "magrittr", "estimatr", "estimatr", 
+  "texreg", "dplyr")
+
+invisible(lapply(pks, function(x) if (!require(x, character.only=T)){install.packages(x);library(x, character.only = T)}))
+
+# knitr options
+require(knitr)
+opts_knit$set(echo = FALSE, warning = FALSE, message = FALSE)
+opts_knit$set(cache = TRUE)
+options(knitr.duplicate.label = 'allow')
+
+source("0_helpers.R")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Import clean data
+dat <- readRDS("data/clean/covid_survey.RDS")
+questions <- readRDS("data/clean/questions.RDS")
+```
+
+# Sample
+
+## Map of Respondents
+
+```{r si-fig1, echo=FALSE, warning=FALSE, message=FALSE}
+dat_st <- read_csv("data/raw/Covid-19+Survey+-+baseline+-+subset_April+23,+2020_14.08_str.csv")[-c(1:2),]
+
+### NG ###
+code_ng <- dat_st %>% filter(country == "Nigeria" & 
+                               ResponseId %in% dat$ResponseId) %>%
+  mutate(ADM1_NAME = paste0(loc_state_nc_ng, loc_state_ne_ng,
+                            loc_state_nw_ng, loc_state_se_ng,
+                            loc_state_ss_ng, loc_state_sw_ng)) %>%
+  group_by(ADM1_NAME) %>% dplyr::summarise(size = n())
+
+code_ng$ADM1_NAME <- gsub("NA", "", code_ng$ADM1_NAME, fixed = TRUE)
+
+ng_sp <- readOGR( 
+  dsn= "data/gis/Nigeria States/NGA_cnty_admin1", 
+  layer="nga_polbnda_adm1_1m_salb",
+  verbose=FALSE
+)
+
+ng_sp <- merge(ng_sp, code_ng)
+#missing
+# ng_sp$ADM1_NAME[is.na(ng_sp$size)]
+# plot(ng_sp, col = ng_sp$size)
+
+ng_sf <- st_as_sf(ng_sp)
+ng_sf$share <- ng_sf$size/sum(ng_sf$size, na.rm = TRUE)
+ng_sf$share[is.na(ng_sf$share)] <- 0
+
+### KE ###
+code_ke <- dat_st %>% filter(country == "Kenya" & 
+                               ResponseId %in% dat$ResponseId) %>%
+  mutate(COUNTY = loc_county_KY) %>%
+  group_by(COUNTY) %>% dplyr::summarise(size = n())
+
+code_ke$COUNTY[code_ke$COUNTY == "Trans-Nzoia"] <- "Trans Nzoia"
+code_ke$COUNTY[code_ke$COUNTY == "Tharaka-Nithi"] <- "Tharaka"
+code_ke$COUNTY[code_ke$COUNTY == "Taita-Taveta"] <- "Taita Taveta"
+
+ke_sp <- readOGR( 
+  dsn= "data/gis/kenyan-counties", 
+  layer="County",
+  verbose=FALSE
+)
+
+ke_sp <- merge(ke_sp, code_ke)
+#missing
+# ke_sp$COUNTY[is.na(ke_sp$size)]
+# plot(ke_sp, col = ke_sp$size)
+
+ke_sf <- st_as_sf(ke_sp)
+ke_sf$share <- ke_sf$size/sum(ke_sf$size, na.rm = TRUE)
+ke_sf$share[is.na(ke_sf$share)] <- 0
+
+### UG ###
+code_ug <- dat_st %>% filter(country == "Uganda" &
+                               ResponseId %in% dat$ResponseId) %>%
+  mutate(DNAME_06 = paste0(loc_dist_cent_ug, loc_dist_west_ug,
+                            loc_dist_north_ug, loc_dist_east_ug)) %>%
+  group_by(DNAME_06) %>% dplyr::summarise(size = n())
+
+code_ug$DNAME_06 <- gsub("NA", "", code_ug$DNAME_06, fixed = TRUE)
+code_ug$DNAME_06[code_ug$DNAME_06 == "Luweero"] <- "Luwero"
+code_ug$DNAME_06[code_ug$DNAME_06 == "Sembabule"] <- "Ssembabule"
+
+ug_sp <- readOGR(
+  dsn= "data/gis/uganda_districts_2014",
+  layer="uganda_districts_2014",
+  verbose=FALSE
+)
+
+ug_sp <- merge(ug_sp, code_ug)
+#missing
+# ug_sp$DNAME_06[is.na(ug_sp$size)]
+# code_ug$DNAME_06[!code_ug$DNAME_06 %in% ug_sp$DNAME_06]
+
+ug_sf <- st_as_sf(ug_sp)
+ug_sf$share <- ug_sf$size/sum(ug_sf$size, na.rm = TRUE)
+ug_sf$share[is.na(ug_sf$share)] <- 0
+
+ug_sf$share_s <- cut(ug_sf$share, breaks = seq(0,.30, 0.05), 
+                     labels = c("<0.05", "<0.10", "<0.15", "<0.20", "<0.25", "<0.30"))
+ke_sf$share_s <- cut(ke_sf$share, breaks = seq(0,.30, 0.05), 
+                     labels = c("<0.05", "<0.10", "<0.15", "<0.20", "<0.25", "<0.30"))
+ng_sf$share_s <- cut(ng_sf$share, breaks = seq(0,.30, 0.05), 
+                     labels = c("<0.05", "<0.10", "<0.15", "<0.20", "<0.25", "<0.30"))
+
+#plot
+ng_map <- map_respondents(ng_sf, title = "Nigeria") + theme(legend.position = "none")
+ke_map <- map_respondents(ke_sf, title = "Kenya") + theme(legend.position = "none")
+ug_map <- map_respondents(ug_sf, title = "Uganda") #+ guides(fill=guide_legend(nrow=1,byrow=TRUE))
+
+do.call(gridExtra::marrangeGrob, 
+        args = list(list(ng_map, ug_map, ke_map), 
+                    ncol = 3, nrow = 1, top = NULL))
+```
+
+```{r si-fig1-save, echo=FALSE, message=FALSE, warning=FALSE}
+glist <- lapply(list(ng_map, ug_map, ke_map), ggplotGrob)
+ggsave("figures/respondent_map_discrete.pdf",
+       marrangeGrob(glist, nrow = 1, ncol = 3, top=NULL), width = 8, height = 5)
+```
+
+## Comparing demographics, attitudes, and behaviors of respondents who did not correctly identify that `maintaining a distance of 1-2 meters from others' as a way to reduce the spread of COVID-19.
+
+```{r si-tab1, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+
+baltest_out <- dat %>% filter(!is.na(dat$country)) %>%
+  dplyr::select(female, dem_age, dem_edu, loc_urbrur,
+                voted_incumbent, copartisan, dem_religiosity, 
+                rel_catholic, rel_protestant, rel_evangelical, rel_muslim,
+                rel_other,
+                occ_student, occ_midlev, occ_uprlev, occ_never, occ_manual,
+                fact_reduce_spread_4) %>%
+  gather(key = var, value = outcome, -fact_reduce_spread_4) %>%
+  group_by(var) %>%
+  do({
+## Run t-test of mean balance
+    t_out <- try(t.test(outcome ~ factor(fact_reduce_spread_4), data = .), silent = TRUE)
+    data.frame(pval = t_out$p.value, 
+               mean_group1 = t_out$estimate[1], mean_group2 = t_out$estimate[2])
+  })
+
+baltest_out$Variable <- c("Copartisan","Age","Schooling Level","Religiosity",
+                    "Female","Urban","Occupation-Manual","Occupation-Mid-level",
+                    "Occupation-Never employed","Occupation-student","Occupation-upper level",
+                    "Religion:Catholic","Religion:Evangelical","Religion:Muslim","Religion:Other" ,"Religion:protestant","Voted for incumbent Pres.")
+
+
+## Report balance statistics
+dem_tab <- baltest_out %>% ungroup() %>%
+  dplyr::select(Variable, mean_group1, mean_group2, pval) %>%
+  rename(`NOT know distancing helps` = mean_group1, 
+         `Know distancing helps` = mean_group2) %>%
+  mutate(`NOT know distancing helps` = round(`NOT know distancing helps`, 3),
+         `Know distancing helps` = round(`Know distancing helps`, 3),
+         pval = round(pval, 3)) %>%
+   xtable(digits=3,
+         caption = "Demographics of respondents who did not and did know maintaining physical distance helps reduce the spread of COVID-19",
+         label = "tab:notknowdist_dems") %>%
+  print(., include.rownames=FALSE, comment = FALSE, 
+        caption.placement = "top")
+
+write_table(dem_tab,"tables/tab_notknowdist_dems.tex")
+```
+
+```{r si-tab2, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+country_pct <- dat[!is.na(dat$country),] %>% 
+  group_by(country) %>% 
+  summarise(table(fact_reduce_spread_4)[1]/n())
+
+# outcome vars:
+dat$att_lock_bin <- ifelse(dat$att_lock>0,1,0)
+
+
+outvars <- dat %>% filter(!is.na(dat$country)) %>%
+  dplyr::select(att_lock_bin, 
+                att_lock_guess,
+                behav_write,
+                fact_trueforyou_9,
+                hypo_answer,
+                #le_count,
+                fact_reduce_spread_4) %>%
+  gather(key = var, value = outcome, -fact_reduce_spread_4) %>%
+  group_by(var) %>%
+  do({
+## Run t-test of mean balance
+    t_out <- try(t.test(outcome ~ factor(fact_reduce_spread_4), data = .), silent = TRUE)
+    data.frame(pval = t_out$p.value, 
+               mean_group1 = t_out$estimate[1], mean_group2 = t_out$estimate[2])
+  })
+
+outvars$Variable <- c("Support lockdown","Guess others support lockdown","Wrote message","Wore a mask when last left house","Vignette response")
+
+## Report balance statistics
+outvars_tab <- outvars %>% ungroup() %>%
+  dplyr::select(Variable, mean_group1, mean_group2, pval) %>%
+  rename(`NOT know distancing helps` = mean_group1, 
+         `Know distancing helps` = mean_group2) %>%
+  mutate(`NOT know distancing helps` = round(`NOT know distancing helps`, 3),
+         `Know distancing helps` = round(`Know distancing helps`, 3),
+         pval = round(pval, 3)) %>%
+   xtable(digits=3,
+         caption = "Attitudes and behaviors of respondents who did not and did know maintaining physical distance helps reduce the spread of COVID-19",
+         label = "tab:notknowdist_outvars") %>%
+  print(., include.rownames=FALSE, comment = FALSE, 
+        caption.placement = "top")
+
+write_table(outvars_tab,"tables/tab_notknowdist_outvars.tex")
+```
+
+# Factual Knowledge
+
+## Responses to True/False Question
+
+```{r si-fig2, echo=FALSE, warning=FALSE, message=FALSE}
+fact <- dat %>% dplyr::select(starts_with("fact_")) %>% names
+fact1 <- grep("_tf_", fact, fixed = TRUE, value = TRUE)
+
+
+fact_dat <- dat %>% filter(!is.na(country)) %>%
+  group_by(country) %>%
+  dplyr::select(fact1) %>% 
+  summarise_all(.funs = list(mean = function(x) mean(x, na.rm=T), se = function(x) sd(x, na.rm=T)/sqrt(length(na.omit(x)))))
+
+names(fact_dat)[2:7] <- sub("(\\_.*?)\\_", "\\1.", names(fact_dat)[2:7]) # replace 2nd _ with .
+
+fact_dat <- 
+  fact_dat %>% 
+  tidyr::pivot_longer(cols =fact_tf.older_mean:fact_tf.transmit_se,
+                      names_to = c("var", "stat"), names_pattern = ("(^[^_]+_[^_]+)_(.*)$")) #split names on 2nd _
+
+# takes everything after the last _ : ".*_"
+# takes everything before the last _: "(?<=_tf).*",
+
+fact_dat <-  fact_dat %>% 
+  tidyr::pivot_wider(names_from = stat, values_from = value)
+
+
+labels <- c("Coronavirus is only dangerous for older people",
+               "There are currently no medicines or vaccine that prevent COVID-19",
+               "If someone has been infected with coronavirus they can transmit the virus to someone else even if they do not feel sick or have any symptoms")
+
+fact_dat$label <- rep(labels, 3)
+
+var_width = 20
+fact_dat2 <- mutate(fact_dat, pretty_label = str_wrap(label, width = var_width))
+
+
+fact_plot <- ggplot(fact_dat2, aes(x=country, y = mean)) + 
+  facet_grid(~pretty_label) + 
+  geom_bar(stat = "identity", position = position_dodge(.9)) + 
+  scale_fill_grey(name="Country")+
+  geom_errorbar(aes(ymin=mean-1.96*se,
+                    ymax=mean+1.96*se),position = position_dodge(.9), width=.2) +
+  labs(y = "Percent of respondents reporting statement is 'True'", x = NULL) +
+  scale_y_continuous(labels=scales::percent) +
+  ggtitle("") +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = .5, size=16),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black"))
+
+pdf("figures/fig_si_fact1.pdf", width = 12, height = 9 )
+fact_plot
+dev.off()
+```
+
+![](figures/fig_si_fact1.pdf)
+
+\clearpage
+
+## Knowledge of Number of Cases
+
+```{r si-fig3, echo=FALSE, warning=FALSE, message=FALSE}
+# Number of cases -- excludes 5 responses >= 1000 cases
+ncasesdat <- 
+  dat %>% filter(!is.na(country) & 
+                   fact_numb_cases < 1000) %>%
+  group_by(country) %>%
+  #https://www.worldometers.info/coronavirus/
+  dplyr::mutate(cases_start = case_when(country == "Kenya" ~ 208,
+                                        country == "Nigeria" ~ 343,
+                                        country == "Uganda" ~ 54),
+                cases_end = case_when(country == "Kenya" ~ 225,
+                                      country == "Nigeria" ~ 407,
+                                      country == "Uganda" ~ 55))
+
+ncasesdat %>% group_by(country, cases_start, cases_end) %>% summarize(pct90_110 = mean(fact_numb_cases >= .9*cases_start & fact_numb_cases <= 1.1*cases_end, na.rm = TRUE))
+
+# ncasesdat %>% #group_by(country) %>%
+#   summarize(correct_ncase = mean(fact_numb_cases %in% c(cases_start:cases_end), na.rm = TRUE))
+
+ncases <- ggplot(ncasesdat) + 
+  geom_density(aes(x = fact_numb_cases,
+                   group = country, fill = country,
+                   color = country)) +
+  labs(x = "Guess of Number of Cases") +
+  ylab("Density") +
+  xlim(c(0,500)) + 
+  facet_grid(country~., scales = "free") +
+  geom_vline(aes(xintercept = ncasesdat$cases_start), linetype = "dashed") +
+  geom_vline(aes(xintercept = ncasesdat$cases_end), linetype = "dashed") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5),
+        axis.title.x = element_text(size = 8),
+        legend.position = "none") 
+
+pdf("figures/fig_si_ncases.pdf", width = 8, height = 6)
+ncases
+dev.off()
+
+```
+
+![](figures/fig_si_ncases.pdf)
+
+\clearpage
+
+## Source of Information
+
+```{r si-fig4, echo=FALSE, warning=FALSE, message=FALSE}
+dat_st <- dat_st[dat_st$ResponseId %in% dat$ResponseId,]
+dat_st$info1 <- ifelse(grepl("Social media", dat_st$info1), "Social Media", dat_st$info1)
+dat_st$info1[dat_st$info1 == "Other, please specify"] <- "Other"
+
+
+inf <- dat_st %>%
+  filter(country %in% c("Kenya", "Uganda", "Nigeria")) %>%
+  filter(!is.na(info1)) %>%
+  dplyr::group_by(country) %>%
+  dplyr::mutate(n_country = n()) %>%
+  dplyr::group_by(country, info1) %>%
+  dplyr::summarise(pct_med = n()/unique(n_country),
+                   se = sqrt((pct_med*(1-pct_med))/unique(n_country)))
+
+inf$info1[inf$info1 == "Social media (such as Facebook, Twitter, Instagram, Whatsapp)"] <- "Social Media"
+
+infosource <- ggplot(inf, aes(reorder(info1, pct_med), pct_med)) + 
+  geom_bar(stat = "identity") + 
+  scale_y_continuous(labels=scales::percent) +
+  geom_errorbar(aes(ymin=pct_med-1.96*se,
+                    ymax=pct_med+1.96*se),
+                position = position_dodge(.9), width=.2) +
+  facet_wrap(~country) + labs(y = "Percent of Respondents", x = "") +
+  coord_flip() + theme_bw()
+
+pdf("figures/info_sources.pdf", width = 8, height = 6)
+infosource
+dev.off()
+
+```
+
+![](figures/info_sources.pdf)
+
+\clearpage
+
+# Balance of List Experiment
+
+```{r si-fig5-prep, echo=FALSE, warning=FALSE, message=FALSE}
+
+balance <- function(var, df){
+  n_t <- sum(df$le_condition==1 & !is.na(var), na.rm = T)
+  meant <- var[df$le_condition==1] %>% mean(., na.rm = T)
+  
+  n_c <- sum(df$le_condition==0 & !is.na(var), na.rm = T)
+  meanc <- var[df$le_condition==0] %>% mean(., na.rm = T)
+  
+  #Variance of binary
+  if(all(var[!is.na(var)] %in% c(0,1))){
+    set <- sqrt((meant * (1-meant)/n_t))
+    sec <- sqrt((meanc * (1-meanc)/n_c))
+    prob <- (meant*n_t + meanc*n_c) / (n_t + n_c)
+    diff <- meant-meanc
+    sediff = sqrt(prob*(1 - prob) *((1/n_t) + (1/n_c)))
+  }else{
+    vart <- mean((var[df$le_condition==1] - meant)^2, na.rm = T)
+    set <- sqrt(vart/(n_t-1))
+    varc <- mean((var[df$le_condition==0] - meanc)^2, na.rm = T)
+    sec <- sqrt(varc/(n_c-1))
+    diff <- meant - meanc
+    sediff <- sqrt(set^2 + sec^2)
+  }
+  z <- diff/sediff
+  p <- 2*pt(-abs(z),df = (n_t+n_c-1), lower.tail = T)
+  return(c(`N` = n_t + n_c, 
+           `Mean Treatment` = meant, `SE Treatment` = set, 
+           `Mean Control` = meanc, `SE Control` = sec, 
+           `Diff` = diff, `SE Diff` = sediff,
+           `p-value` = p))
+}
+
+create_balancetab <- function(df){
+    balancedat <- df %>% 
+    dplyr::select(female, 
+           dem_age,
+           dem_edu, loc_urbrur,
+           voted_incumbent, copartisan, dem_religiosity, 
+           rel_catholic, rel_protestant, rel_evangelical, rel_muslim,
+           rel_other,
+           occ_student, occ_midlev, occ_uprlev, occ_never, occ_manual)
+  # Generate balance table data
+  balance_dat <- apply(balancedat, 2, function(x) 
+    balance(x, df)) %>% t %>% as.data.frame %>%
+  mutate(ci_lower = Diff - 1.96*`SE Diff`,
+         ci_upper = Diff + 1.96*`SE Diff`)
+
+  # colnames(balance_dat) <- c("diff", "ci_lower", "ci_upper")
+  rownames(balance_dat) <- c(
+    "Female", 
+    "Age",
+    "Schooling level",
+    "Rural",
+    "Voted for incumbent past election", 
+    "Copartisan",
+    "Religiosity", "Religion - Catholic",
+    "Religion - Protestant", "Religion - Evangelical",
+    "Religion - Muslim", "Religion - Other",
+    "Occupation - Student", 
+    "Occupation - Mid-level professional",
+    "Occupation - Upper-level professional",
+    "Occupation - Never employed",
+    "Occupation - Skilled manual")
+  return(balance_dat)
+}
+
+covbalance_plot <- function(balance_dat){
+  ggplot(balance_dat) + 
+    geom_pointrange(
+      aes(x = rownames(balance_dat),
+          y = Diff, ymin = ci_lower, ymax = ci_upper),
+      size = .2) +
+    geom_hline(aes(yintercept = 0), linetype = "dashed") + 
+    coord_flip() + theme_bw() + 
+    labs(x = "Pre-treatment covariates", y = "Difference (95% CI)")
+}
+
+ngtab <- create_balancetab(df = dat[dat$country=="Nigeria",])
+ugtab <- create_balancetab(df = dat[dat$country=="Uganda",])
+ketab <- create_balancetab(df = dat[dat$country=="Kenya",])
+```
+
+```{r si-tab3-5, echo=FALSE, warning=FALSE, message=FALSE}
+# Country-wise balance tables
+ngtab$N <- as.character(paste0(ngtab$N))
+bal_ng <- format_table(ngtab[, c(1, 4:8)], include.rownames = TRUE, caption = "Balance of Pre-Treatment Covariates in List Experiment (Nigeria)", label = "tab:bal_ng", include.colnames = TRUE,
+                       align = "lcccccc")
+bal_ng[2] <- "\\footnotesize \\centering"
+write_table(bal_ng, output_file = "tables/tab_si_bal_le_ng.tex")
+
+ketab$N <- as.character(paste0(ketab$N))
+bal_ke <- format_table(ketab[, c(1, 4:8)], include.rownames = TRUE, caption = "Balance of Pre-Treatment Covariates in List Experiment (Kenya)", label = "tab:bal_ke", include.colnames = TRUE,
+                       align = "lcccccc")
+bal_ke[2] <- "\\footnotesize \\centering"
+write_table(bal_ke, output_file = "tables/tab_si_bal_le_ke.tex")
+
+ugtab$N <- as.character(paste0(ugtab$N))
+bal_ug <- format_table(ugtab[, c(1, 4:8)], include.rownames = TRUE, caption = "Balance of Pre-Treatment Covariates in List Experiment (Uganda)", label = "tab:bal_ug", include.colnames = TRUE,
+                       align = "lcccccc")
+bal_ug[2] <- "\\footnotesize \\centering"
+write_table(bal_ug, output_file = "tables/tab_si_bal_le_ug.tex")
+```
+
+```{r si-fig5, echo=FALSE, warning=FALSE, message=FALSE}
+# Balance figure
+
+datplot <- rbind(
+  cbind(Country = "Kenya", varname = rownames(ketab), ketab),
+  cbind(Country = "Nigeria", varname = rownames(ngtab), ngtab),
+  cbind(Country = "Uganda", varname = rownames(ugtab), ugtab))
+
+balance_plot <- ggplot(datplot) + 
+  geom_pointrange(aes(x = varname,
+                      y = Diff, ymin = ci_lower, ymax = ci_upper,
+                      shape = Country),
+    size = .8, fatten = .9, fill = "blue") +
+  facet_grid(~ Country) +
+  geom_hline(aes(yintercept = 0), linetype = "dashed", alpha = .8, color = "grey") + 
+  theme_bw() + 
+    # coord_cartesian(xlim = c(-.55, .55)) +
+  theme(legend.position = "none") +
+  labs(y = "Difference (95% CI)", x = "") +
+  scale_y_continuous(breaks=c(-.25,0,.25)) +
+  coord_flip(ylim = c(-.5, .5))
+
+pdf("figures/fig_covbalance_le.pdf", width = 8, height = 6)
+balance_plot
+dev.off()
+```
+
+![](figures/fig_covbalance_le.pdf)
+
+\clearpage
+
+# Main Results
+
+## Difference in Means Estimates
+
+### Treatment 1: Social Pressure
+
+```{r si-tab6, echo=FALSE, warning=FALSE, message=FALSE}
+#### [H1a] Effect on Y1: Expected Behavior
+dim1_T1_pool <- estimate_dim(y = "hypo_answer", "C", "T1")
+dim1_T1_ke <- estimate_dim(y = "hypo_answer", "C", "T1", country = "Kenya")
+dim1_T1_ng <- estimate_dim(y = "hypo_answer", "C", "T1", country = "Nigeria")
+dim1_T1_ug <- estimate_dim(y = "hypo_answer", "C", "T1", country = "Uganda")
+
+#### [H2a] Effect on Y2: Message Writing
+
+dim2_T1_pool <- estimate_dim(y = "behav_wrote", "C", "T1")
+dim2_T1_ke <- estimate_dim(y = "behav_wrote", "C", "T1", country = "Kenya")
+dim2_T1_ng <- estimate_dim(y = "behav_wrote", "C", "T1", country = "Nigeria")
+dim2_T1_ug <- estimate_dim(y = "behav_wrote", "C", "T1", country = "Uganda")
+
+# (Using externality dictionary only: collab, together, others, us all, let us, let's, unit, union, one another)
+#### [H3a] Effect on Y3: Message Content
+
+dim3_T1_pool <- estimate_dim(y = "letter_ext", "C", "T1")
+dim3_T1_ke <- estimate_dim(y = "letter_ext", "C", "T1", country = "Kenya")
+dim3_T1_ng <- estimate_dim(y = "letter_ext", "C", "T1", country = "Nigeria")
+dim3_T1_ug <- estimate_dim(y = "letter_ext", "C", "T1", country = "Uganda")
+```
+
+```{r si-tab6-format, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+#format output
+y1 <- do.call(rbind, lapply(
+  list(dim1_T1_pool, dim1_T1_ke, dim1_T1_ng, dim1_T1_ug), tidy))[,c(2:3,5)] 
+y1 <- weave(paste0(round(y1$estimate, 3), star(y1$p.value)), round(y1$std.error, 3), rnames = c("Pooled","Kenya","Nigeria","Uganda"))
+
+y2 <- do.call(rbind, lapply(
+  list(dim2_T1_pool, dim2_T1_ke, dim2_T1_ng, dim2_T1_ug), tidy))[,c(2:3,5)]
+
+y2 <- weave(paste0(round(y2$estimate, 3), star(y2$p.value)), round(y2$std.error, 3))
+
+y3 <- do.call(rbind, lapply(
+  list(dim3_T1_pool, dim3_T1_ke, dim3_T1_ng, dim3_T1_ug), tidy))
+
+y3 <- weave(paste0(round(y3$estimate, 3), star(y3$p.value)), round(y3$std.error, 3))
+
+tab_dim <- cbind(y1, y2, y3)
+colnames(tab_dim) <- c("Sample", "Y1: Expected Behavior", "Y2: Message Writing", "Y3: Externality Content")
+
+tab_dim <- format_table(tab_dim, 
+             caption = "Difference in Means Estimates for T1 (Social Pressure)", label = "tab_dim_soc", include.colnames = TRUE, align = "llccc", 
+             add.note = "We display difference-in-means estimates between social pressure (T1) and the control condition in the vignette experiment. Country rows refer to average treatment effects of country samples. The pooled results report a difference in means with weights adjusted such that countries are weighted equally (rather than individuals being weighted equally). This avoids that results are driven primarily by Nigerian respondents, which comprise a majority (56 percent) of our sample. Column (1) outcome refers to the scaled answer to the vignette experiment for respondent beliefs about how likely the hypothetical individual is to accept a dinner invitation from a friend (1-very unlikely, 5 - very likely). Column (2) outcome is whether the respondent wrote a message encouraging others to practice physical distancing.  Column (3) outcome refers to whether the content of the message written appealed to coordinated collective effort (e.g., included terms such as `collaboration`, `together`, `union`). $^{*}$ $p<0.05$; $^{**}$ $p<0.01$; $^{***}$ $p<0.001$")
+
+tab_dim[6] <- "\\hline\\hline & \\multicolumn{3}{c}{Outcome} \\\\"
+tab_dim[8] <- "& (1) & (2) & (3) \\\\ \\hline"
+
+write_table(tab_dim, "tables/tab_si_dimT1.tex")
+cat(tab_dim, sep = "\n")
+```
+
+\clearpage
+
+### Treatment 2: Material Cost
+
+```{r si-tab7, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+#### [H1a] Effect on Y1: Expected Behavior
+dim1_T2_pool <- estimate_dim(y = "hypo_answer", "C", "T2")
+dim1_T2_ke <- estimate_dim(y = "hypo_answer", "C", "T2", country = "Kenya")
+dim1_T2_ng <- estimate_dim(y = "hypo_answer", "C", "T2", country = "Nigeria")
+dim1_T2_ug <- estimate_dim(y = "hypo_answer", "C", "T2", country = "Uganda")
+
+#### [H2a] Effect on Y2: Message Writing
+dim2_T2_pool <- estimate_dim(y = "behav_wrote", "C", "T2")
+dim2_T2_ke <- estimate_dim(y = "behav_wrote", "C", "T2", country = "Kenya")
+dim2_T2_ng <- estimate_dim(y = "behav_wrote", "C", "T2", country = "Nigeria")
+dim2_T2_ug <- estimate_dim(y = "behav_wrote", "C", "T2", country = "Uganda")
+
+#### [H3a] Effect on Y3: Message Content
+# (Using externality dictionary only: collab, together, others, us all, let us, let's, unit, union, one another)
+
+dim3_T2_pool <- estimate_dim(y = "letter_ext", "C", "T2")
+dim3_T2_ke <- estimate_dim(y = "letter_ext", "C", "T2", country = "Kenya")
+dim3_T2_ng <- estimate_dim(y = "letter_ext", "C", "T2", country = "Nigeria")
+dim3_T2_ug <- estimate_dim(y = "letter_ext", "C", "T2", country = "Uganda")
+```
+
+```{r si-tab7-prep, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+#format output
+y1 <- do.call(rbind, lapply(
+  list(dim1_T2_pool, dim1_T2_ke, dim1_T2_ng, dim1_T2_ug), tidy))[,c(2:3,5)] 
+y1 <- weave(paste0(round(y1$estimate, 3), star(y1$p.value)), round(y1$std.error, 3), rnames = c("Pooled","Kenya","Nigeria","Uganda"))
+
+y2 <- do.call(rbind, lapply(
+  list(dim2_T2_pool, dim2_T2_ke, dim2_T2_ng, dim2_T2_ug), tidy))[,c(2:3,5)]
+
+y2 <- weave(paste0(round(y2$estimate, 3), star(y2$p.value)), round(y2$std.error, 3))
+
+y3 <- do.call(rbind, lapply(
+  list(dim3_T2_pool, dim3_T2_ke, dim3_T2_ng, dim3_T2_ug), tidy))
+
+y3 <- weave(paste0(round(y3$estimate, 3), star(y3$p.value)), round(y3$std.error, 3))
+
+tab_dim <- cbind(y1, y2, y3)
+colnames(tab_dim) <- c("Sample", "Y1: Expected Behavior", "Y2: Message Writing", "Y3: Externality Content")
+
+tab_dim <- format_table(tab_dim, 
+             caption = "Difference in Means Estimates for T2 (Material Cost)", label = "tab_dim_mat", include.colnames = TRUE, align = "llccc", 
+             add.note = "We display difference-in-means estimates between material cost (T2) and the control condition in the vignette experiment. Country rows refer to average treatment effects of country samples. The pooled results report a difference in means with weights adjusted such that countries are weighted equally (rather than individuals being weighted equally). This avoids that results are driven primarily by Nigerian respondents, which comprise a majority (56 percent) of our sample. Column (1) outcome refers to the scaled answer to the vignette experiment for respondent beliefs about how likely the hypothetical individual is to accept a dinner invitation from a friend (1-very unlikely, 5 - very likely). Column (2) outcome is whether the respondent wrote a message encouraging others to practice physical distancing.  Column (3) outcome refers to whether the content of the message written appealed to coordinated collective effort (e.g., included terms such as `collaboration`, `together`, `union`). $^{*}$ $p<0.05$; $^{**}$ $p<0.01$; $^{***}$ $p<0.001$")
+
+
+tab_dim[6] <- "\\hline\\hline & \\multicolumn{3}{c}{Outcome} \\\\"
+tab_dim[8] <- "& (1) & (2) & (3) \\\\ \\hline"
+write_table(tab_dim, "tables/tab_si_dimT2.tex")
+# render_table("tables/tab_t2_dim.tex")
+cat(tab_dim, sep = "\n")
+```
+
+\clearpage
+
+## Lin Estimates
+
+```{r si-tab8-prep1, echo=FALSE, warning=FALSE, message=FALSE}
+#### [H1] Lin Cov Adjusted Model
+covs <- c("hypo_answer_scaled", "hypo_condition",
+         "behav_wrote",
+         "dem_age", "female", 
+         "dem_edu", "dem_religiosity", #"dem_rel",
+         # "rel_catholic", "rel_protestant", 
+         # "rel_evangelical", "rel_muslim",
+         "occ_student", 
+         "occ_midlev", "occ_uprlev", "occ_never", "occ_manual",
+         "loc_urbrur", 
+         "voted_copartisan", "lockdown", "country")
+
+# Check completeness
+cpt <- dat %>%
+  dplyr::select(country, all_of(covs))
+
+# Check completeness of answers
+# cpt_pool <-  apply(cpt, 2, function(x) sum(!is.na(x)))
+# cpt_ke <-  apply(cpt[cpt$country == "Kenya",], 2, function(x) mean(!is.na(x)))
+# cpt_ng <-  apply(cpt[cpt$country == "Nigeria",], 2, function(x) mean(!is.na(x)))
+# cpt_ug <-  apply(cpt[cpt$country == "Uganda",], 2, function(x) mean(!is.na(x)))
+# 
+# complete_tab <- rbind(pool = cpt_pool, kenya = cpt_ke, nigeria = cpt_ng, uganda = cpt_ug)
+```
+
+```{r si-tab8-prep2, echo=FALSE, warning=FALSE, message=FALSE}
+# Lin with covariates
+# religiosity (replacing religion)
+
+#Y1 scaled
+dat$dem_rel <- as.factor(dat$dem_rel)
+lin_hypo1_s <- estimate_lin(hypo_answer_scaled ~ hypo_condition, dat)
+lin_hypo1_s_ke <- estimate_lin(hypo_answer_scaled ~ hypo_condition, 
+                           dat, cntry = "Kenya")
+lin_hypo1_s_ng <- estimate_lin(hypo_answer_scaled ~ hypo_condition, 
+                           dat, cntry = "Nigeria")
+lin_hypo1_s_ug <- estimate_lin(hypo_answer_scaled ~ hypo_condition, 
+                           dat, cntry = "Uganda")
+```
+
+```{r si-tab8-prep3, echo=FALSE, warning=FALSE, message=FALSE}
+#Y2 scaled
+lin_hypo2_s <- estimate_lin(behav_wrote ~ hypo_condition, dat)
+lin_hypo2_s_ke <- estimate_lin(behav_wrote ~ hypo_condition, 
+                           dat, cntry = "Kenya")
+lin_hypo2_s_ng <- estimate_lin(behav_wrote ~ hypo_condition, 
+                           dat, cntry = "Nigeria")
+lin_hypo2_s_ug <- estimate_lin(behav_wrote ~ hypo_condition, 
+                           dat, cntry = "Uganda")
+```
+
+```{r si-tab8-prep4, echo=FALSE, warning=FALSE, message=FALSE}
+#Y3 scaled
+lin_hypo3_s <- estimate_lin(letter_ext ~ hypo_condition, dat)
+lin_hypo3_s_ke <- estimate_lin(letter_ext ~ hypo_condition, 
+                           dat, cntry = "Kenya")
+lin_hypo3_s_ng <- estimate_lin(letter_ext ~ hypo_condition, 
+                           dat, cntry = "Nigeria")
+lin_hypo3_s_ug <- estimate_lin(letter_ext ~ hypo_condition, 
+                           dat, cntry = "Uganda")
+
+```
+
+```{r si-tab8-prep5, echo=FALSE, warning=FALSE, message=FALSE}
+col1 <- make_lin_tab(list(lin_hypo1_s, lin_hypo1_s_ke, lin_hypo1_s_ng, lin_hypo1_s_ug))
+col2 <- make_lin_tab(list(lin_hypo2_s, lin_hypo2_s_ke, lin_hypo2_s_ng, lin_hypo2_s_ug))
+col3 <- make_lin_tab(list(lin_hypo3_s, lin_hypo3_s_ke, lin_hypo3_s_ng, lin_hypo3_s_ug))
+```
+
+```{r si-tab8, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+tab_lin <- cbind(col1, col2[,3], col3[,3])
+colnames(tab_lin) <- c("Sample","Condition", "Y1: Expected Behavior", "Y2: Message Writing", "Y3: Externality Content")
+
+tab_lin <- format_table(tab_lin, 
+             caption = "Covariate Adjusted Lin Estimates", label = "tab_lin_main", include.colnames = TRUE, align = "lllccc", add.note = "We display coefficients from linear models interacting centered covariates with treatment conditions (see Lin (2013) for details on estimation method). Coefficients therefore refer to the adjusted average treatment effect of each of the two treatment conditions: social pressure (T1) and material cost (T2). Covariates include age, gender, education level, religiosity, occupation, self-reported urban/rural location, a dummy for whether the respondent voted for the incumbent in previous election or is copartisan with incumbent's party, a dummy for whether respondent under lockdown policy. Country rows refer to regression coefficients from country samples. The pooled regression includes country fixed effects and observations are reweighted such that countries are weighted equally (rather than individuals being weighted equally). This avoids that results are driven primarily by Nigerian respondents, which comprise a majority (56 percent) of our sample.  Column (1) outcome refers to the scaled answer to the vignette experiment for respondent beliefs about how likely the hypothetical individual is to accept a dinner invitation from a friend (1-very unlikely, 5 - very likely). Column (2) outcome is whether the respondent wrote a message encouraging others to practice physical distancing.  Column (3) outcome refers to whether the content of the message written appealed to coordinated collective effort (e.g., included terms such as `collaboration`, `together`, `union`). $^{*}$ $p<0.05$; $^{**}$ $p<0.01$; $^{***}$ $p<0.001$")
+
+tab_lin <- gsub("R\\verb|^|2", "$R^2$", tab_lin, fixed = TRUE)
+
+tab_lin[2] <- "\\centering \\footnotesize"
+tab_lin[6] <- "\\hline\\hline && \\multicolumn{3}{c}{Outcome} \\\\"
+tab_lin[8] <- "& & (1) & (2) & (3) \\\\ \\hline"
+
+tab_lin[c(12,19,26,33)] <- paste0(tab_lin[c(12,19,26,33)], "\\cline{2-5}")
+tab_lin[c(15,22,29)] <- paste0(tab_lin[c(15,22,29)], "\\hline")
+
+write_table(tab_lin, "tables/tab_si_lin_main.tex")
+cat(tab_lin, sep = "\n")
+```
+
+\pagebreak
+
+# Attitudes Toward Lockdown
+
+## Own preferences versus expectations of others’ preferences toward a lockdown policy
+
+```{r si-tab9, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+
+dat$att_lock_bin <- ifelse(dat$att_lock>0,1,0)
+
+fig2.tab <- dat %>% filter(!is.na(dat$country)) %>%
+  mutate(country_lock = paste(country, lockdown, sep="_"),
+         att_lock_guess = att_lock_guess/10) %>%
+  dplyr::select(country_lock, att_lock_bin, att_lock_guess) %>%
+  gather(key = var, value = outcome, -country_lock) %>%
+  group_by(country_lock) %>%
+  do({
+    ## Run t-test of means
+    t_out <- try(t.test(outcome ~ var, data = .), silent = TRUE)
+    data.frame(pval = t_out$p.value, 
+               mean_group1 = t_out$estimate[1], mean_group2 = t_out$estimate[2])
+  }) 
+
+full <- dat %>% filter(!is.na(country)) %>% 
+  summarise(country_lock= "Full Sample", 
+            pval = t.test(att_lock_bin, att_lock_guess/10)$p.value, 
+            mean_group1 = mean(att_lock_bin,na.rm=T), 
+            mean_group2 = mean(att_lock_guess/10,na.rm=T))
+
+fig2.tab2 <- rbind(fig2.tab,full)
+                  
+
+names(fig2.tab2) <- c("Country","p-value","Own Mean", "Guess Mean")
+fig2.tab2$Country <- c("Kenya","Nigeria - no lockdown", "Nigeria - lockdown", "Uganda","Full Sample")
+
+## Report means + pval of diff
+own_guess_tab <- fig2.tab2 %>% dplyr::select(Country,`Own Mean`,`Guess Mean`,`p-value`) %>% 
+  xtable(digits=3,
+         caption = "Percent of respondents who favor lockdown themselves and their guess of what percent of others favor it, by Country",
+         label = "tab:fig2") %>%
+  print(., include.rownames=FALSE, comment = FALSE, 
+        caption.placement = "top")
+
+write_table(own_guess_tab, "tables/tab_si_ownguess_figure2.tex")
+```
+
+```{r si-tab10, message=FALSE, warning=FALSE, echo=FALSE, results='asis'}
+urb <- dat %>%
+  drop_na(country, lockdown, loc_urbrur, att_lock, att_lock_guess) %>%
+  dplyr::group_by(country, lockdown, loc_urbrur) %>%
+  dplyr::summarize(att_lock = list(att_lock),
+                   att_lock_guess = list(att_lock_guess),
+                   N = n()) %>%
+  dplyr::group_by(country, lockdown, loc_urbrur)
+
+urb %<>% dplyr::mutate(mean_actual = mean(unlist(att_lock) > 0),
+                       mean_guess  = mean(unlist(att_lock_guess))/10,
+                       gap = mean_guess - mean_actual,
+                       pval = round(t.test(unlist(att_lock)>0,
+                                           unlist(att_lock_guess)/10)$p.value, 4),
+                       lockdown = case_when(
+                         lockdown == 0 & country == "Nigeria" ~ " - no lockdown",
+                         lockdown == 1 & country == "Nigeria" ~ " - lockdown",
+                         country != "Nigeria" ~ "")) %>%
+  dplyr::mutate(country = paste0(country, lockdown)) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-att_lock, -att_lock_guess, -lockdown)
+
+urb$loc_urbrur <- ifelse(urb$loc_urbrur == 0, "Rural","Urban")
+
+names(urb) <- c("Country", "Urban/Rural", "Obs.",
+                "Own Mean", "Guess Mean",  "Difference", "p-value")
+
+
+own_guess_urban <- 
+  xtable(urb, digits=3,
+         caption = "Percent of respondents who favor lockdown themselves and their guess of what percent of others favor it, by country and urban residency",
+         label = "tab:fig2_urban_rural") %>%
+  print(., include.rownames=FALSE, 
+        comment = FALSE, 
+        caption.placement = "top")
+
+write_table(own_guess_urban, "tables/tab_si_ownguess_urban.tex")
+```
+
+## Social Desirability Bias
+
+```{r si-tab11, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+modl1 <- lm_robust(att_lock ~ lockdown, data = dat, subset = country == "Nigeria")
+
+na_vote <- case_when(is.na(dat$voted_incumbent) & !is.na(dat$country) ~ 1,
+                     !is.na(dat$voted_incumbent) & !is.na(dat$country) ~ 0)
+
+mod_na <- lm_robust(att_lock ~ na_vote, fixed_effects = country, data=dat)
+
+tab_na_vote <- 
+  texreg(list(modl1, mod_na),
+         custom.coef.names = c("(Intercept)", "Lockdown", "Refused to Report Vote Choice"),
+         custom.model.names = paste0("(", 1:2, ")"),
+         include.ci = FALSE,
+         custom.header = list(`Own Support for Lockdown` = 1:2),
+         caption = "Difference in support for lockdown attitudes among those who under lockdown, and those who refused to answer vote choice question",
+       custom.gof.names = c("R$^2$", "Adj. R$^2$", 
+                            # "Statistic", "p-value", 
+                            "Observations", "RMSE"),
+       label = "tab_na_vote", 
+       caption.above = TRUE,
+       custom.note = "'Lockdown' coefficient in column 1 indicates the difference in support for lockdown among Nigerians under lockdown and those not under lockdown. Coefficient in column 2 shows difference in support for lockdown between those who refused to answer the survey question about their vote choice in the previous election, with fixed effects at the country level. Both specifications include robust standard errors. %stars",
+       return.string = TRUE)
+
+writeLines(tab_na_vote, file("tables/tab_si_na_vote.tex"))
+```
+
+\clearpage
+
+## Predicting attitudes toward lockdown policy
+
+```{r si-tab12, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+
+urb <- dat %>%
+  drop_na(country, lockdown, att_lock, loc_urbrur) %>%
+  dplyr::group_by(country, lockdown) %>%
+  dplyr::summarize(N = n(), 
+                   rural = list(att_lock[loc_urbrur==0]),
+                   urban = list(att_lock[loc_urbrur==1])) %>%
+  dplyr::group_by(country, lockdown)
+
+
+urb %<>% dplyr::mutate(mean_rural = mean(unlist(rural) > 0),
+                       mean_urban  = mean(unlist(urban) > 0),
+                       diff = mean_rural - mean_urban,
+                       pval = round(
+                         t.test(unlist(rural)>0,
+                                unlist(urban)>0)$p.value, 4),
+                       lockdown = case_when(
+                         lockdown == 0 & country == "Nigeria" ~ " - no lockdown",
+                         lockdown == 1 & country == "Nigeria" ~ " - lockdown",
+                         country != "Nigeria" ~ "")) %>%
+  dplyr::mutate(country = paste0(country, lockdown)) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-rural, -urban, -lockdown)
+
+names(urb) <- c("Country", "Obs.", "Rural support", "Urban Support",
+                "Difference", "p-value")
+
+own_att_urban <- 
+  xtable(urb, digits=3,
+         caption = "Percent of respondents who favor lockdown in rural and urban areas, by country",
+         label = "tab:lock_urban_rural") %>%
+  print(., include.rownames=FALSE, 
+        comment = FALSE, 
+        caption.placement = "top")
+
+write_table(own_att_urban, "tables/tab_si_att_lock_urban.tex")
+# t.test(dat[dat$loc_urbrur==0,]$att_lock_bin,dat[dat$loc_urbrur==1,]$att_lock_bin)
+```
+
+```{r si-tab13-prep1, echo=FALSE, warning=FALSE, message=FALSE}
+#clean
+rand.ord <- read.csv("data/raw/Covid-19+Survey+-+baseline+-+subset_April+23,+2020_14.09_num.csv")
+
+rand.ord <- rand.ord %>% dplyr::select(ResponseId,lockdown_DO_att_lock)
+# note: if lockdown_DO_att_lock == 3 --> own attitudes toward lockdown BEFORE guess
+# if lockdown_DO_att_lock == 4 --> own attitudes toward lockdown AFTER guess
+
+# merge with dataset to get randomization order
+dat2 <- merge(dat,rand.ord,by="ResponseId")
+
+dat2 <- dat2 %>% 
+  mutate(guess_first = ifelse(dat2$lockdown_DO_att_lock==4,1,0))
+
+dat3 <- dat2 %>% filter(!is.na(country)) %>% 
+  dplyr::group_by(country,lockdown,guess_first) %>%
+  dplyr::summarise(
+    own = mean(att_lock, na.rm=T),
+    guess = mean(att_lock_guess/10, na.rm=T),
+    N = n()
+  )
+
+dat_gap <- dat2 %>% mutate(att_lock_yes = 1*(att_lock > 0)) %>%
+  mutate(socialmed = ifelse(info1==7,1,0),
+         believecure = ifelse(fact_tf_cure==0,1,0),
+         urban = ifelse(loc_urbrur==1,1,0)
+  ) %>% 
+  group_by(country) %>%
+  mutate(att_lock_pct = mean(att_lock_yes, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(att_lock_correct = 10*round(att_lock_pct, 1),
+         att_lock_gap = att_lock_guess-att_lock_correct,
+         att_lock_gap_abs = abs(att_lock_guess-att_lock_correct))
+```
+
+```{r si-tab13-prep2, echo=FALSE,warning=FALSE, message=FALSE}
+pred.likelock.all<- lm(att_lock ~ att_lock_guess + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed + believecure + urban + female + dem_age + dem_edu + dem_rel + factor(country), 
+                             data = dat_gap[dat_gap$guess_first==1,])
+
+
+pred.likelock.ng <- lm(att_lock ~ att_lock_guess + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed +
+                               lockdown + believecure + urban + female + dem_age + dem_edu + dem_rel, 
+                             data = dat_gap[dat_gap$country=="Nigeria",])
+
+# uganda
+pred.likelock.ug <- lm(att_lock ~ att_lock_guess + trust_cov_pres + trust_cov_moh  + trust_cov_media +
+                               voted_incumbent + socialmed + believecure + urban + female + dem_age + dem_edu + dem_rel,
+                             data = dat_gap[dat_gap$country=="Uganda",])
+
+# kenya
+pred.likelock.ky <- lm(att_lock ~ att_lock_guess + trust_cov_pres + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed + believecure + urban +
+                               female + dem_age + dem_edu + dem_rel, data = dat_gap[dat_gap$country=="Kenya",])
+```
+
+```{r si-tab13, results="asis", warning=FALSE, message=FALSE, echo=FALSE}
+stargazer(pred.likelock.all, pred.likelock.ky,pred.likelock.ng,pred.likelock.ug, 
+          no.space = TRUE, type="latex", dep.var.caption = "", dep.var.labels = "Attitude Toward Lockdown",
+          label = "si:pred_att_lock_full", font.size= "scriptsize", column.labels = c("Pooled", "Kenya", "Nigeria", "Uganda"),
+          covariate.labels = 
+            c("Guess Lockdown Attitudes", "Trust in President", "Trust in Ministry of Health", 
+              "Trust in media", "Voted incumbent", "Primary source - Social media", "Under lockdown",
+              "Believe cure exists" , "Urban", "Female", "Age", "Schooling", "Religion - Catholic", 
+              "Religion - Protestant","Religion - Evangelical", "Religion - Muslim",
+              "Religion - Hindu", "Religion - Animist", "Religion - Other", "Nigeria", "Uganda", "(Intercept)"),
+          title = "Predicting Attitudes Toward Lockdown Policy", 
+          out = "tables/tab_si_pred_att_lock.tex")
+```
+
+\clearpage
+
+```{r si-tab14-prep, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+## sample asked about guess first ##
+pred.likelock.all<- lm(att_lock ~ att_lock_guess + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed +
+                         believecure + urban + female + dem_age + dem_edu + dem_rel + factor(country), 
+                       data = dat_gap[dat_gap$guess_first==1,])
+
+
+pred.likelock.ng <- lm(att_lock ~ att_lock_guess + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed +
+                         lockdown + believecure + urban + female + dem_age + dem_edu + dem_rel, 
+                       data = dat_gap[dat_gap$country=="Nigeria" & dat_gap$guess_first==1,])
+
+# uganda
+pred.likelock.ug <- lm(att_lock ~ att_lock_guess + trust_cov_pres + trust_cov_moh  + trust_cov_media +
+                         voted_incumbent + socialmed + believecure + urban + female + dem_age + dem_edu + dem_rel,
+                       data = dat_gap[dat_gap$country=="Uganda" & dat_gap$guess_first==1,])
+
+# kenya
+pred.likelock.ky <- lm(att_lock ~ att_lock_guess + trust_cov_pres + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed + believecure + urban +
+                         female + dem_age + dem_edu + dem_rel, data = dat_gap[dat_gap$country=="Kenya" & dat_gap$guess_first==1,])
+
+stargazer(pred.likelock.all, pred.likelock.ky,pred.likelock.ng,pred.likelock.ug, 
+          no.space = TRUE, type="latex", dep.var.caption = "", dep.var.labels = "Attitude Toward Lockdown",
+          label = "si:pred_att_lock", font.size = "scriptsize", column.labels = c("Pooled", "Kenya", "Nigeria", "Uganda"), covariate.labels = 
+            c("Guess Lockdown Attitudes", "Trust in President", "Trust in Ministry of Health", 
+              "Trust in media", "Voted incumbent", "Primary source - Social media", "Under lockdown",
+              "Believe cure exists" , "Urban", "Female", "Age", "Schooling", "Religion - Catholic", 
+              "Religion - Protestant","Religion - Evangelical", "Religion - Muslim",
+              "Religion - Hindu", "Religion - Animist", "Religion - Other", "Nigeria", "Uganda", "(Intercept)"),
+          title = "Predicting own lockdown attitudes among respondents first asked to guess about others’ attitudes", out = "tables/tab_si_pred_att_lock_fi.tex")
+
+```
+
+\clearpage
+
+```{r si-tab14, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+## sample asked about guess first ##
+dat_gap$christian <- ifelse(dat_gap$rel_catholic == 1 |
+                            dat_gap$rel_evangelical ==1 |
+                            dat_gap$rel_protestant ==1,1,0)
+
+pred.likelock.all<- lm(att_lock ~ att_lock_guess*guess_first + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed +
+                         believecure + urban + female + dem_age + dem_edu + factor(christian) + factor(country), 
+                       data = dat_gap)
+
+
+pred.likelock.ng <- lm(att_lock ~ att_lock_guess*guess_first + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed +
+                         lockdown + believecure + urban + female + dem_age + dem_edu + factor(christian), 
+                       data = dat_gap[dat_gap$country=="Nigeria",])
+
+# uganda
+pred.likelock.ug <- lm(att_lock ~ att_lock_guess*guess_first + trust_cov_pres + trust_cov_moh  + trust_cov_media +
+                         voted_incumbent + socialmed + believecure + urban + female + dem_age + dem_edu + factor(christian),
+                       data = dat_gap[dat_gap$country=="Uganda",])
+
+# kenya
+pred.likelock.ky <- lm(att_lock ~ att_lock_guess*guess_first + trust_cov_pres + trust_cov_moh  + trust_cov_media + voted_incumbent + socialmed + believecure + urban +
+                         female + dem_age + dem_edu + factor(christian), data = dat_gap[dat_gap$country=="Kenya",])
+
+stargazer(pred.likelock.all, pred.likelock.ky,pred.likelock.ng,pred.likelock.ug, 
+          no.space = TRUE, type="latex", dep.var.caption = "", dep.var.labels = "Attitude Toward Lockdown",
+          label = "si:pred_att_lock_full", font.size = "scriptsize", column.labels = c("Pooled", "Kenya", "Nigeria", "Uganda"), 
+         covariate.labels =
+         c("Guess Lockdown Attitudes", "Guess first", "Trust in President", "Trust in Ministry of Health",
+           "Trust in media", "Voted incumbent", "Primary info source - Social media", "Under lockdown",
+           "Believe cure exists" , "Urban", "Female", "Age", "Schooling", "Religion - Christian",
+            "Nigeria", "Uganda", "Guess Lockdown:Guess First",
+         "(Intercept)"),
+          title = "Predicting own lockdown attitudes with guess and question order", out = "tables/tab_si_pred_att_lock_corr.tex")
+
+```
+
+\clearpage
+
+## Correlates of guesses of others’ support for a lockdown policy
+
+```{r si-fig6, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+ 
+# vignette response #
+dg1 <- dat_gap %>% 
+  group_by(att_lock_guess, country) %>% 
+  summarise(
+    mean = mean(hypo_answer, na.rm=T),
+    se = sd(hypo_answer, na.rm=T)/sqrt(length(na.omit(hypo_answer)))
+  )
+
+vign <- ggplot(dg1, aes(x = att_lock_guess, y = mean))+
+  geom_point(position=position_dodge(.4), size = 2)+
+  geom_errorbar(aes(ymin = mean-1.96*se, ymax = mean+1.96*se), width=.2, position=position_dodge(.4)) +
+  facet_grid(~country) +
+  ylab("Vignette response (1-extremely unlikely, 5-extremely likely)")+
+  geom_smooth(method="lm") + 
+  xlab("Guess of how many out of 10 peers support lockdown policy") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5, size = 14),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black"))
+
+pdf("figures/fig_si_guesscorr_vign.pdf", width = 12, height = 8)
+vign
+dev.off()
+
+# t.test(dat_gap[dat_gap$country=="Uganda" & dat_gap$att_lock_guess<5,]$hypo_answer,
+#        dat_gap[dat_gap$country=="Uganda" & dat_gap$att_lock_guess>=5,]$hypo_answer)
+# 
+# t.test(dat_gap[dat_gap$country=="Nigeria" & dat_gap$att_lock_guess<5,]$hypo_answer,
+#        dat_gap[dat_gap$country=="Nigeria" & dat_gap$att_lock_guess>=5,]$hypo_answer)
+
+# willingness to write message #
+# pooling across vignette conditions #
+dg2 <- dat_gap %>% 
+  group_by(att_lock_guess, country) %>% 
+  summarise(
+    mean = mean(behav_write, na.rm=T),
+    se = sd(behav_write, na.rm=T)/sqrt(length(na.omit(behav_write)))
+  )
+
+write <- ggplot(dg2, aes(x = att_lock_guess, y = mean))+
+  geom_point(position=position_dodge(.4), size = 2)+
+  geom_errorbar(aes(ymin = mean-1.96*se, ymax = mean+1.96*se), width=.2, position=position_dodge(.4)) +
+  facet_grid(~country) +
+  ylab("Percent choosing to write a message")+
+  xlab("Guess as to how many out of 10 peers support lockdown policy") +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5, size = 14),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black"))
+
+
+pdf("figures/fig_si_guesscorr_write.pdf", width = 12, height = 8)
+write
+dev.off()
+
+# t.test(dat_gap[dat_gap$att_lock_guess<5,]$behav_write,
+#        dat_gap[dat_gap$att_lock_guess>=5,]$behav_write)
+
+# message content -- collective #
+
+dg3 <- dat_gap %>% 
+  group_by(att_lock_guess, country) %>% 
+  summarise(
+    col.mean = mean(letter_col, na.rm=T),
+    col.se = sd(letter_col, na.rm=T)/sqrt(length(na.omit(letter_col))),
+    ext.mean = mean(letter_ext, na.rm=T),
+    ext.se = sd(letter_ext, na.rm=T)/sqrt(length(na.omit(letter_ext))),
+    rel.mean = mean(letter_rel, na.rm=T),
+    rel.se = sd(letter_rel, na.rm=T)/sqrt(length(na.omit(letter_rel))),
+    civ.mean = mean(letter_civ, na.rm=T),
+    civ.se = sd(letter_civ, na.rm=T)/sqrt(length(na.omit(letter_civ)))
+) %>% 
+  gather(col.mean:civ.se, key = key, value = value) %>%
+  separate(key, into = c("Message Content", "num")) %>%
+  spread(key = num, value = value)
+  
+  
+content <- ggplot(dg3, aes(x = att_lock_guess, y = mean, col = `Message Content`))+
+  geom_point(position=position_dodge(.4), size = 2)+
+  geom_errorbar(aes(ymin = mean-1.96*se, ymax = mean+1.96*se), width=.2, position=position_dodge(.4)) +
+  facet_grid(~country) +
+  ylab("Percent of messages coded as collective")+
+  xlab("Guess as to how many out of 10 peers support lockdown policy") +
+  geom_smooth(method="lm") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5, size = 14),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black"))
+
+
+pdf("figures/fig_si_guesscorr_content.pdf", width = 12, height = 8)
+content
+dev.off()
+```
+
+![](figures/fig_si_guesscorr_vign.pdf)
+
+![](figures/fig_si_guesscorr_write.pdf)
+
+![](figures/fig_si_guesscorr_content.pdf)
+
+\clearpage
+
+# Behavior as Measured by the List Experiment
+
+## Physical Distancing
+
+```{r si-tab15, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+le <- dat %>% filter(!is.na(country)) %>%
+  dplyr::group_by(country, lockdown) %>% 
+  dplyr::summarize(Control = mean(le_control, na.rm = TRUE),
+                   Treatment = mean(le_treat, na.rm = TRUE),
+                   Diff = Treatment - Control,
+                   `p-value` = t.test(le_control, le_treat)$p.value)
+
+le %<>% dplyr::rename(Country = country)
+
+le_tab <- le %>% xtable(digits=3,
+                        caption = "Physical Distancing List Experiment, by Country", 
+                        label = "tab:list_lkd") %>%
+  print(., include.rownames=FALSE, comment = FALSE, 
+        caption.placement = "top")
+
+write_table(le_tab, "tables/tab_si_le_lkd.tex")
+```
+
+\clearpage
+
+Test difference in means between control and treated conditions for respondents in Nigeria experiencing lockdown or not.
+
+```{r si-tab16-prep, echo=FALSE, eval=FALSE, warning=FALSE, message=FALSE}
+# control list group
+t.test(dat[dat$country=="Nigeria" & dat$lockdown==0 & dat$le_condition==0,]$le_control,
+       dat[dat$country=="Nigeria" & dat$lockdown==1 & dat$le_condition==0,]$le_control)
+
+t.test(dat[dat$country=="Nigeria" & dat$lockdown==0 & dat$le_condition==1,]$le_treat,
+       dat[dat$country=="Nigeria" & dat$lockdown==1 & dat$le_condition==1,]$le_treat)
+```
+
+````{r si-tab16, echo=FALSE,results = "asis", warning=FALSE, message=FALSE}
+nigeria.le.reg <- lm(le_count ~ lockdown*le_condition, data = dat[dat$country=="Nigeria",])
+
+nigeria.le.tab <- stargazer(nigeria.le.reg, 
+                        title = "List experiment results by lockdown status in Nigeria", 
+                        label = "tab:list_nig")
+
+write_table(nigeria.le.tab, "tables/tab_si_le_nigeria.tex")
+```
+
+\clearpage
+
+### Relationship with Attitudes and Beliefs
+
+```{r si-tab17, echo=FALSE,results='asis', warning=FALSE, message=FALSE}
+
+lm_dat <- dat %>%
+  mutate(le_dist05 = case_when(
+    dat$le_condition == 1 & dat$le_count == 0 ~ 0,
+    dat$le_condition == 1 & dat$le_count == 5 ~ 1))
+
+table(lm_dat$le_dist05)
+
+lm1_05 <- lm_robust(hypo_answer~le_dist05, fixed_effects = country, data = lm_dat)
+
+lm1_05ke <- lm_robust(hypo_answer~le_dist05, subset = country == "Kenya", data = lm_dat)
+lm1_05ng <- lm_robust(hypo_answer~le_dist05, subset = country == "Nigeria", data = lm_dat)
+lm1_05ug <- lm_robust(hypo_answer~le_dist05, subset = country == "Uganda", data = lm_dat)
+
+
+lm2_05 <- lm_robust(att_lock~le_dist05, fixed_effects = country, data = lm_dat)
+
+lm2_05ke <- lm_robust(att_lock~le_dist05, subset = country == "Kenya", data = lm_dat)
+lm2_05ng <- lm_robust(att_lock~le_dist05, subset = country == "Nigeria", data = lm_dat)
+lm2_05ug <- lm_robust(att_lock~le_dist05, subset = country == "Uganda", data = lm_dat)
+
+tab_distancer <- 
+  texreg(list(lm1_05, lm1_05ke, lm1_05ng, lm1_05ug, lm2_05, lm2_05ke, lm2_05ng, lm2_05ug),
+         include.ci = FALSE,
+         custom.coef.names = c("Likely Non-Distancer", "(Intercept)"),
+         custom.model.names = rep(c("Pooled", "Kenya", "Nigeria", "Uganda"), 2),
+         custom.header = list(`Expected Behavior` = 1:4,
+                              `Own Support` = 5:8),
+         caption = "Correlation between likely `non-distancers` and expected distancing behaviors of others, and own attitudes toward lockdown", 
+         label = "tab_distancers_belief", 
+         caption.above = TRUE,
+         custom.gof.names = c("R$^2$", "Adj. R$^2$", "Observations", "RMSE"), 
+         # "F-stat", "p-value"),
+       custom.note = "Coefficients report differences between 'likely non-distancers' and 'likely distancers'. Columns 1-4 outcome refers to the expected behavior of a fellow countryman or woman (higher values indicate more likely to not physical distance) in the vignette experiment (column 1). Columns 5-8 outcome is the perception of other respondents' support for lockdown policy (column 2). In both columns, 'likely non-distancers' are coded as respondents who reported engaging in all activity listed in the list experiment in the condition that included an item for 'came within two meters of someone outside their household' (coded as 1), and those who reported having engaged in none of the activities ('Likely Non-Distancer' coded as 0). The regressions use robust standard errors. Pooled results include country-fixed effects. %stars",
+       return.string = TRUE)
+
+writeLines(tab_distancer, file("tables/tab_distancer.tex"))
+cat(tab_distancer)
+```
+
+\clearpage
+```{r si-fig9, echo=FALSE, message=FALSE, warning=FALSE}
+hypodat <- lm_dat %>% filter(!is.na(country), !is.na(le_dist05)) %>%
+  dplyr::group_by(le_dist05, country) %>% 
+  dplyr::summarise(
+    n = n(),
+    mean = mean(hypo_answer, na.rm=T),
+    se = sd(hypo_answer, na.rm=T)/sqrt(length(na.omit(hypo_answer))),
+  )
+
+hypodat_all <- lm_dat %>% 
+  filter(!is.na(country), !is.na(le_dist05)) %>%
+  group_by(le_dist05) %>%
+  dplyr::summarise(
+    n = n(),
+    mean = mean(hypo_answer, na.rm=T),
+    se = sd(hypo_answer, na.rm=T)/sqrt(length(na.omit(hypo_answer))),
+  ) %>% mutate(country = "Pooled")
+
+hypodat <- rbind(hypodat, hypodat_all)
+
+hypodat %<>% group_by(country) %>% 
+  mutate(Country = paste0(str_to_title(country), " (n = ", sum(n), ")"))
+
+hypodat$Country <- fct_relevel(hypodat$Country, "Pooled (n = 157)", after = Inf)
+
+distancers <- ggplot(hypodat, aes(x = as.factor(le_dist05), y = mean,
+                                  group = Country)) +
+  geom_errorbar(aes(ymin=mean-1.96*se,ymax=mean+1.96*se),width=.1) +
+  geom_line(position = position_dodge(.9)) +
+  facet_grid(Country~.) + theme_bw() + theme(legend.position ="none") +
+  labs(x = "0 - Physical distanced, 1 - Did not \n(implied by List Experiment answer)",
+       y = "Belief that others will not physical distance (95% CI)")
+
+pdf("figures/fig_distancing_beliefs.pdf", width = 4, height = 5)
+distancers
+dev.off()
+
+```
+
+![](figures/fig_distancing_beliefs.pdf)
+
+\clearpage
+
+```{r si-fig10, echo=FALSE, message=FALSE, warning=FALSE}
+hypodat <- lm_dat %>% filter(!is.na(country) & !is.na(fact_trueforyou_9)) %>%
+  group_by(fact_trueforyou_9, country) %>% 
+  dplyr::summarise(
+    n = n(),
+    mean = mean(att_lock_guess, na.rm=T),
+    se = sd(att_lock_guess, na.rm=T)/sqrt(length(na.omit(att_lock_guess))),
+  )
+
+hypodat_all <- lm_dat %>% 
+  filter(!is.na(country), !is.na(fact_trueforyou_9)) %>%
+  group_by(fact_trueforyou_9) %>%
+  dplyr::summarise(
+    n = n(),
+    mean = mean(att_lock_guess, na.rm=T),
+    se = sd(att_lock_guess, na.rm=T)/sqrt(length(na.omit(att_lock_guess))),
+  ) %>% mutate(country = "Pooled")
+
+hypodat <- rbind(hypodat, hypodat_all)
+
+hypodat %<>% group_by(country) %>% 
+  mutate(Country = paste0(str_to_title(country), " (n = ", sum(n), ")"))
+
+hypodat$Country <- fct_relevel(hypodat$Country, "Pooled (n = 2814)", after = Inf)
+
+maskwearers <- ggplot(hypodat, aes(x = as.factor(fact_trueforyou_9), y = mean,
+                                  group = Country)) +
+  geom_errorbar(aes(ymin=mean-1.96*se,ymax=mean+1.96*se),width=.1) +
+  geom_line(position = position_dodge(.9)) +
+  facet_grid(Country~.) + theme_bw() + theme(legend.position ="none") +
+  labs(x = "0 - Did not wear mask, 1 - Wore mask",
+       y = "Guess about others' support for lockdown (95% CI)")
+
+pdf("figures/fig_maskwearer_guess_lock.pdf", width = 4, height = 5)
+maskwearers
+dev.off()
+```
+
+![](figures/fig_maskwearer_guess_lock.pdf)
+
+\pagebreak
+
+# Power calculation
+
+## Design Declaration
+
+We simulate a parsimonious version of our design design with sample size `N` with binary draws of the potential outcomes. These binary draws are independent for each treatment condition, and are drawn from from a cummulative distribution function of with $\mu = 0 \; \forall \; Z\in\{C, T1, T2\}$ and standard deviations given by `latent_sds` _plus_ an additional probability defined `outcome_means`. Importantly, we do not account for block- or country-level correlation in outcomes, and assume sample size for each study site is the same.
+
+```{r, warning=FALSE, message=FALSE}
+covid_designer <- function(N, outcome_means = c(0,.2,0), 
+                           latent_sds = c(1,1,1)){
+  
+  # M: Model  
+  population <- declare_population(N = N,
+                                   p_C = rnorm(N, 0, latent_sds[1L]), 
+                                   p_T1 = rnorm(N, 0, latent_sds[2L]), 
+                                   p_T2 = rnorm(N, 0, latent_sds[3L]))
+  
+  potential_outcomes <- declare_potential_outcomes(
+    Y_Z_C = draw_binary(N = N, latent = pmin(pnorm(p_C) + outcome_means[1], 1)),
+    Y_Z_T1 = draw_binary(N = N, latent = pmin(pnorm(p_T1) + outcome_means[2], 1)),
+    Y_Z_T2 = draw_binary(N = N, latent = pmin(pnorm(p_T2) + outcome_means[3], 1))
+    )
+  
+  # I: Inquiry
+  estimand  <- declare_estimands(ate_Y_T1_C = mean(Y_Z_T1 - Y_Z_C), 
+                                 ate_Y_T2_C = mean(Y_Z_T2 - Y_Z_C), 
+                                 ate_Y_T2_T1 = mean(Y_Z_T2 - Y_Z_T1))
+  
+  # D: Data Strategy
+  assignment <- declare_assignment(num_arms = 3, 
+                                   conditions = c("C", "T1", "T2"), 
+                                   assignment_variable = Z)
+  
+  reveal_Y <-  declare_reveal(assignment_variables = Z)
+  
+  # A: Answer Strategy
+  estimator <- declare_estimator(handler = function(data) {
+    estimates <- rbind.data.frame(
+      ate_Y_T1_C = difference_in_means(formula = Y ~ Z, 
+                                      data = data, condition1 = "C", 
+                                      condition2 = "T1"),
+      ate_Y_T2_C = difference_in_means(formula = Y ~ Z, data = data, 
+                                      condition1 = "C", condition2 = "T2"), 
+      ate_Y_T2_T1 = difference_in_means(formula = Y ~ Z, data = data, 
+                                      condition1 = "T1", condition2 = "T2"))
+    names(estimates)[names(estimates) == "N"] <- "N_DIM"
+    estimates$estimator_label <- c("DIM (Z_T1 - Z_C)", "DIM (Z_T2 - Z_C)", 
+                                   "DIM (Z_T2 - Z_T2)")
+    estimates$estimand_label <- rownames(estimates)
+    estimates$estimate <- estimates$coefficients
+    estimates$term <- NULL
+    return(estimates)
+  })
+  
+  # Design
+  covid_design <-
+    population + potential_outcomes + assignment + reveal_Y + estimand +  estimator
+  
+  covid_design
+}
+```
+
+## Diagnostic Table
+
+We then focus our power analyis on the ATE of T1. We vary `outcome_means` by simulating different values of treatment effect ranging from 2.5% to 20% in increments of 2.5%. We also consider different variances of our latent variable in `latent_sds` used to draw binary potential outcomes of under T1 between .5-2 standard deviations. And ultimately, we vary our sample size between 1200 and 2100.
+
+Assuming the simple data-generating process defined above, we are able to observe how well powered we are to detect a given effect under different variance levels for our treatment-level distribution of latent treatment outcomes and for different sample sizes.
+
+Below is a sample of the table showing a sample of the designs, along with bootstrap estimates of power of our estimate under each design.
+
+```{r, echo=FALSE, eval = FALSE, results="asis", warning=FALSE, message=FALSE}
+covid_designs <- expand_design(
+  designer = covid_designer, expand = TRUE,
+  N = seq(1200, 2100, 300),
+  outcome_means = list(c(0,0,0), 
+                       c(0,.025,0),
+                       c(0,.05,0),
+                       c(0,.075,0),
+                       c(0,.1,0),
+                       c(0,.125,0),
+                       c(0,.15,0),
+                       c(0,.175,0),
+                       c(0,.2,0)),
+  latent_sds = list(c(1,.5,1),
+                    c(1,1,1),
+                    c(1,1.5,1),
+                    c(1,2,1),
+                    c(1,2.5,1),
+                    c(1,3,1)))
+
+# diagnose <- diagnose_designs(covid_designs, sims = 500, bootstrap_sims = 100)
+
+# saveRDS(diagnose, file = "diagnoses.RDS")
+diagnose <- readRDS(file = "diagnoses.RDS")
+
+diagnosis <- diagnose$diagnosands_df
+diagnosis$latent_sds <- factor(diagnosis$latent_sds, levels = c("c(1, 0.5, 1)",
+                                                                "c(1, 1, 1)",
+                                                                "c(1, 1.5, 1)",
+                                                                "c(1, 2, 1)",
+                                                                "c(1, 2.5, 1)",
+                                                                "c(1, 3, 1)"))
+
+diagnosis$outcome_means <- factor(
+  diagnosis$outcome_means, levels = c("c(0, 0, 0)",
+                                      "c(0, 0.025, 0)",
+                                      "c(0, 0.05, 0)",
+                                      "c(0, 0.075, 0)",
+                                      "c(0, 0.1, 0)",
+                                      "c(0, 0.125, 0)",
+                                      "c(0, 0.15, 0)",
+                                      "c(0, 0.175, 0)",
+                                      "c(0, 0.2, 0)"))
+
+diagnosis$power_min <- diagnosis$power - diagnosis$`se(power)` * 1.96
+diagnosis$power_max <- diagnosis$power + diagnosis$`se(power)` * 1.96
+
+samp <- diagnosis %>% filter(estimand_label == "ate_Y_T1_C")
+print(xtable(samp[1:6,c(2:6,11:12)]), include.rownames = FALSE)
+```
+
+
+# Survey Instrument

@@ -1,0 +1,333 @@
+---
+title: "Replication of 'If we move, it moves with us: Physical Distancing in Africa during COVID-19'"
+author: "Clara Bicalho, Melina Platas, Leah Rosenzweig"
+output: pdf_document
+---
+
+# OPTIONS
+
+```{r}
+# Clean raw data from scratch (`TRUE` for complete replication)
+clean <- FALSE 
+```
+
+```{r setup, echo = FALSE, include=FALSE, warning=FALSE, message=FALSE}
+rm(list = setdiff(ls(), "clean"))
+
+# packages
+pks <- c(
+  "readstata13","reshape","dotwhisker", "MASS","dplyr","foreign",
+  "tidyverse","lfe","stargazer","clubSandwich", "randomizr",
+  "haven","rstudioapi", "stringr", "ri", "car", "xtable",
+  "rmarkdown", "tidyr", "dplyr", "iterators", "parallel", "gridExtra", 
+  "kableExtra", "readxl", "ggmap", "rgdal", "maptools", 
+  "sf", "raster", "sp",
+  "magrittr", "estimatr", "estimatr")
+
+invisible(lapply(pks, function(x) if (!require(x, character.only=T)){install.packages(x);library(x, character.only = T)}))
+
+# knitr options
+require(knitr)
+opts_knit$set(echo = FALSE, warning = FALSE, message = FALSE)
+opts_knit$set(cache = TRUE)
+options(knitr.duplicate.label = 'allow')
+
+source("0_helpers.R")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# If clean = TRUE, run cleaning script
+if(clean) render("1_clean_data.Rmd", quiet = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Import data
+dat <- readRDS("data/clean/covid_survey.RDS")
+questions <- readRDS("data/clean/questions.RDS")
+```
+
+# Table 1. Summary Statistics
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sum_cov <- dat %>%
+  dplyr::select(country, female, dem_age, dem_edu, loc_urbrur,
+                voted_incumbent, copartisan, dem_religiosity, 
+                rel_catholic, rel_protestant, rel_evangelical, rel_muslim,
+                rel_other,
+                occ_student, occ_midlev, occ_uprlev, occ_never, occ_manual)
+
+means <- sum_cov %>% filter(!is.na(country)) %>%
+  group_by(country) %>% 
+  summarise_all(.funs = function(x) round(mean(x, na.rm = TRUE), 3)) %>%
+  t
+
+sds <- sum_cov %>% filter(!is.na(country)) %>%
+  group_by(country) %>% summarise_all(.funs = function(x){
+    ifelse(identical(!is.na(unique(x)), c(0,1)),
+           round(sqrt(sum(x - mean(x, na.rm = TRUE))/length(!is.na(x))), 3),
+           round(sd(x, na.rm = TRUE), 3))
+    }) %>% t
+  
+sds <- apply(sds, 2, wrap_str)
+
+matout <- do.call(cbind, lapply(1:nrow(means), function(i) weave(means[i,], sds[i,], inpar_b = FALSE))) %>% t
+
+cov_labels <- c("Female", "Age", "Schooling level",
+                "Urban",
+                "Voted for incumbent past election", 
+                "Copartisan",
+                "Religiosity", "Religion - Catholic",
+                "Religion - Protestant", "Religion - Evangelical",
+                "Religion - Muslim", "Religion - Other",
+                "Occupation - Student", 
+                "Occupation - Mid-level professional",
+                "Occupation - Upper-level professional",
+                "Occupation - Never employed",
+                "Occupation - Skilled manual")
+
+matout <- cbind(c("", cov_labels), matout)
+
+sum_tab <- format_table(matout, type = "latex", 
+                        caption = "Summary Statistics of Covariates", 
+                        align = "llcccccc",
+                        label = "tab:summary_covs",
+                        position = "!h",
+                        note = "")
+```
+
+```{r main_tab1, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+# format table
+sum_tab[8] <- " & \\multicolumn{2}{c}{Kenya}& \\multicolumn{2}{c}{Nigeria}& \\multicolumn{2}{c}{Uganda} \\\\ & Mean & SD & Mean & SD & Mean & SD \\\\ \\hline"
+sum_tab[25] <- paste0("N & \\multicolumn{2}{c}{", sum(sum_cov$country == "Kenya", na.rm = TRUE), "} & \\multicolumn{2}{c}{", sum(sum_cov$country == "Nigeria", na.rm = TRUE), "}& \\multicolumn{2}{c}{", sum(sum_cov$country == "Uganda", na.rm = TRUE), "} \\\\ \\hline")
+
+#export table
+write_table(sum_tab, "tables/summary_covs.tex")
+cat(sum_tab, sep = "\n")
+```
+
+# Figure 1. Factual Beliefs
+
+```{r main_fig1, echo=FALSE, warning=FALSE, message=FALSE}
+reduce_spread_dat <- dat %>% filter(!is.na(country)) %>%
+  group_by(country) %>%
+  dplyr::select(starts_with("fact_reduce_spread_")) %>% 
+  summarise_all(.funs = list(mean = mean, se = function(x) sd(x, na.rm=T)/sqrt(length(na.omit(x)))))
+
+reduce_spread_dat <- 
+  reduce_spread_dat %>% 
+  tidyr::pivot_longer(cols =fact_reduce_spread_1_mean:fact_reduce_spread_7_se,
+                      names_to = c("var", "stat"), names_sep = 20)
+
+reduce_spread_dat <-  reduce_spread_dat %>% 
+  tidyr::pivot_wider(names_from = stat, values_from = value)
+
+labels <- c("Wash hands", "Not touch face", "Sleep under\nmosquito net", "Physical distancing", "Covering face\nsneeze/cough", "Eating garlic", "Wearing mask")
+
+reduce_spread_dat$var <- rep(labels, 3)
+
+reduce_plot <- ggplot(reduce_spread_dat, aes(x=reorder(var,`_mean`), y = `_mean`, fill = country)) + 
+  #facet_wrap(~country) + 
+  geom_bar(stat = "identity", position = position_dodge(.9)) + 
+  scale_fill_grey(name="Country")+
+  geom_errorbar(aes(ymin=`_mean`-1.96*`_se`,
+                    ymax=`_mean`+1.96*`_se`),position = position_dodge(.9), width=.2) +
+  labs(y = "Percent of respondents", x = NULL) +
+  scale_y_continuous(labels=scales::percent) +
+  ggtitle("") +
+  coord_flip() +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = .5, size=16),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black"))
+
+pdf("figures/fig_reduce_spread.pdf", width = 8, height = 6)
+reduce_plot
+dev.off()
+
+reduce_plot
+```
+
+# Figure 2: Own attitudes and belief about other respondent's attitudes
+
+```{r main_fig2, echo=FALSE, warning=FALSE, message=FALSE}
+dat$att_lock_bin <- ifelse(dat$att_lock>0,1,0)
+
+lockdat <- dat %>% filter(!is.na(country)) %>%
+  group_by(country,lockdown) %>% 
+  summarise(
+    #count = n(),
+    own_lock.mean = mean(att_lock_bin, na.rm=T),
+    own_lock.se = sd(att_lock_bin, na.rm=T)/sqrt(length(na.omit(att_lock_bin))),
+    guess_lock.mean = mean(att_lock_guess/10, na.rm=T),
+    guess_lock.se = sd(att_lock_guess/10, na.rm=T)/sqrt(length(na.omit(att_lock_guess)))
+  ) 
+
+# add overall sample stats
+# lockdat.full <- dat %>% filter(!is.na(country)) %>% 
+#   summarise(
+#           country = "Full Sample",
+#           lockdown = NA,
+#           own_lock.mean= mean(att_lock_bin, na.rm=T),
+#           own_lock.se = sd(att_lock_bin, na.rm=T)/sqrt(length(na.omit(att_lock_bin))),
+#           guess_lock.mean = mean(att_lock_guess/10, na.rm=T),
+#           guess_lock.se = sd(att_lock_guess/10,na.rm=T)/sqrt(length(na.omit(att_lock_guess)))
+#           )
+# 
+# lockdat <- rbind(lockdat, lockdat.full)
+
+# reformat/"melt" data
+lockdat2 <- lockdat %>%
+  gather(own_lock.mean:guess_lock.se, key = key, value = value) %>%
+  separate(key, sep = "_lock.", into = c("var", "num")) %>%
+  spread(key = num, value = value)
+
+
+lock_ownguess <-
+  ggplot(lockdat2, aes(x=var,y=mean,fill=factor(lockdown)))+
+  geom_bar(stat="identity",position=position_dodge(.9))+
+  facet_grid(~country)+
+  geom_text(aes(x=var,y=.005,label=paste(round(mean*100,0),"%",sep="")),vjust = .05, position = position_dodge(.9), size=4, color="white") +
+  scale_y_continuous(labels = scales::percent) +
+  geom_errorbar(aes(ymin=mean-1.96*se,ymax=mean+1.96*se),width=.2,position=position_dodge(.9))+
+  xlab("Support mandatory lockdown\n(own attitude v. guess of other respondents')") +
+  ylab("Percent") +
+  #scale_fill_manual(values = c("grey60","grey30","grey45"),labels = c("No lockdown","Lockdown in place",NA),
+  scale_fill_manual(values = c("grey60","grey30"),labels = c("No lockdown","Lockdown in place"),
+                    name = NULL) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5, size=16),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black"))
+
+pdf("figures/fig_own_guess.pdf", width = 8, height = 6)
+lock_ownguess
+dev.off()
+lock_ownguess
+```
+
+# Table 2. Physical Distancing List Experiment, by country
+
+```{r main-tab2, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+le <- dat %>% filter(!is.na(country)) %>%
+  dplyr::group_by(country) %>% 
+  dplyr::summarize(Control = mean(le_control, na.rm = TRUE),
+                   Treatment = mean(le_treat, na.rm = TRUE),
+                   Diff = Treatment - Control,
+                   `p-value` = t.test(le_control, le_treat)$p.value)
+
+le %<>% dplyr::rename(Country = country)
+
+le_tab <- le %>% xtable(digits=3,
+                        caption = "Physical Distancing List Experiment, by Country", label = "tab:list") %>%
+  print(., include.rownames=FALSE, comment = FALSE, 
+        caption.placement = "top")
+
+write_table(le_tab, "tables/tab_le.tex")
+```
+
+# Figure 3: Vignette Treatment Effects
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+### raw 5-point scale
+
+vign <- dat %>% filter(!is.na(country) & !is.na(hypo_condition)) %>%
+  dplyr::group_by(hypo_condition) %>% 
+  dplyr::summarise(
+    `extremely unlikely_mean` = mean(hypo_answer == 1, na.rm=T),
+    `extremely unlikely_se` = sd(hypo_answer == 1, na.rm=T)/sqrt(length(na.omit(hypo_answer == 1))),
+    `somewhat unlikely_mean` = mean(hypo_answer == 2, na.rm=T),
+    `somewhat unlikely_se` = sd(hypo_answer == 2, na.rm=T)/sqrt(length(na.omit(hypo_answer == 2))),
+    `neither_mean` =  mean(hypo_answer == 3, na.rm=T),
+    `neither_se` = sd(hypo_answer == 3, na.rm=T)/sqrt(length(na.omit(hypo_answer == 3))),
+    `somewhat likely_mean` = mean(hypo_answer == 4, na.rm=T),
+    `somewhat likely_se` = sd(hypo_answer == 4, na.rm=T)/sqrt(length(na.omit(hypo_answer == 4))),
+    `extremely likely_mean` = mean(hypo_answer == 5, na.rm=T),
+    `extremely likely_se` = sd(hypo_answer == 5, na.rm=T)/sqrt(length(na.omit(hypo_answer == 5)))
+  ) 
+
+vign2 <- vign %>%
+  gather(`extremely unlikely_mean`:`extremely likely_se`, key = key, value = value) %>%
+  separate(key, sep = "_", into = c("var", "num")) %>%
+  spread(key = num, value = value)
+
+vign2$var <- factor(vign2$var, levels = c("extremely unlikely", "somewhat unlikely",
+                                          "neither", "somewhat likely", 
+                                          "extremely likely"))
+names(vign2)[1] <- "Treatment Condition"
+
+vign.plot <- ggplot(vign2, aes(x=var, y = mean, fill = `Treatment Condition`)) + 
+  geom_bar(stat="identity", position = position_dodge(.95)) +
+  geom_errorbar(aes(ymin=mean-1.96*se, ymax = mean + 1.96*se),
+                width = .2, position = position_dodge(.95))  +
+  scale_fill_grey(labels=c("Control","Social","Material")) +
+  scale_y_continuous(labels=scales::percent) +
+  # geom_text(aes(x=var,y=.005,label=paste(round(mean*100,0),"%",sep="")),vjust = .05, position = position_dodge(.9), size=4, color="white") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = .5, size=16),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        strip.text = element_text(size=14),
+        legend.text = element_text(size=12),
+        legend.position = "bottom",
+        legend.box.background = element_rect(colour = "black")) + 
+  xlab("Perceived likelihood hypothetical man will dine out") +
+  ylab("Percent of Respodnents") 
+  
+  
+pdf("figures/fig_vignette5pt_results.pdf", width = 9.5, height = 6)
+vign.plot
+dev.off()
+vign.plot
+```
+
+# Table 4. Message Content
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+let <- dat %>% dplyr::select(letter_col, letter_ext, letter_civ, letter_rel)
+# colSums(let, na.rm = TRUE)
+
+letc <- dat %>% filter(!is.na(country)) %>%
+  group_by(country) %>%
+  # dplyr::mutate(letter_colext = case_when(letter_col + letter_ext >= 1 ~ 1,
+  #                                  letter_col + letter_ext == 0 ~ 0)) %>%
+  dplyr::select(letter_col, letter_ext, letter_civ, letter_rel) %>%
+  summarize_all(.funs = function(x) round(mean(x, na.rm = TRUE), 3))
+
+nm <- dat %>% filter(!is.na(country)) %>%
+  group_by(country) %>%
+  dplyr::summarize(n = mean(behav_wrote, na.rm = TRUE))
+
+Nm <- dat %>% filter(!is.na(country)) %>%
+  dplyr::group_by(country) %>%
+  dplyr::summarize(n = n())
+
+
+content <- rbind(c("Pooled", round(colMeans(let, na.rm = TRUE), 3)), letc)
+content <- cbind(content, 
+                 `Share Wrote` = round(c(mean(dat$behav_wrote, na.rm = TRUE), nm$n), 3), 
+                 `Total Respondents` = c(sum(!is.na(dat$country)), Nm$n))
+
+colnames(content) <- c("", "Collective", "Externalities", "Civic", "Religious", "Share Wrote", "Total Respondents")
+
+msg_tab <- format_table(content, caption = "Percentage of Messages by Coded Content", include.colnames = TRUE, label = "tab_share_msg", align = "llrrrrrr", add.note = "Messages containing terms from each library as a share of all messages written. Column 5 presents share of respondents that wrote message from total number of respondents in Column 6. Percentages do not add up to 1 due to the fact that a message could be coded into more than one content category.")
+
+write_table(msg_tab, "tables/tab_msg.tex")
+```
+
+\input{tables/tab_msg.tex}
+
+# In-Text Mentions
+
+## Average number of words per message
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sapply(dat$behav_letter[dat$behav_wrote == 1], function(m) sapply(strsplit(m, " "), length)) %>% unname() %>% mean(., na.rm=TRUE)
+```
+

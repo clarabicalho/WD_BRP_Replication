@@ -1,0 +1,2 @@
+load("/Users/dianazhu/Dropbox/COVID19_survey/Analysis/Replication_WD/data/clean/covid_survey.RDS")
+load("/Users/melinaplatas/Dropbox/COVID19_survey/Analysis/Replication_WD/data/clean/questions.RDS")
