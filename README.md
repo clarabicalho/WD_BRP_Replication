@@ -1,4 +1,4 @@
-Replication material for Bicalho, Clara, Melina R. Platas, and Leah R. Rosenzweig. "“If we move, it moves with us:” Physical Distancing in Africa during COVID-19." (2021). _World Development_.
+Replication material for Bicalho, Clara, Melina R. Platas, and Leah R. Rosenzweig. (2021) "“If we move, it moves with us:” Physical Distancing in Africa during COVID-19." _World Development_.
 
 - `/data` contains the raw survey and GIS data
 - `/0_helpers.R` includes helper functions used throughout the Rmd scripts
